@@ -1,0 +1,92 @@
+name: Build RideWithGPX Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # Cho phép bấm nút "Run workflow" thủ công bất kỳ lúc nào trên GitHub
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Tải mã nguồn (Checkout repository with Submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 2. Cài đặt Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 3. Cài đặt Java JDK 21 (Tương thích Capacitor 6/7 & Android Gradle mới nhất)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 4. Cài đặt Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 5. Build Web App & Tự động khởi tạo dự án Android bằng Capacitor
+        working-directory: ./website
+        env:
+          PUBLIC_MAPBOX_TOKEN: ${{ secrets.PUBLIC_MAPBOX_TOKEN }}
+        run: |
+          # Tạo file .env nếu có khai báo Secret trên GitHub
+          if [ -n "$PUBLIC_MAPBOX_TOKEN" ]; then
+            echo "PUBLIC_MAPBOX_TOKEN=$PUBLIC_MAPBOX_TOKEN" >> .env
+          fi
+
+          # Cài đặt dependencies của gpx.studio
+          npm install --legacy-peer-deps
+
+          # Cài đặt Capacitor và các plugin GPS / Filesystem
+          npm install @capacitor/core @capacitor/geolocation @capacitor/filesystem --legacy-peer-deps
+          npm install -D @capacitor/cli @capacitor/android --legacy-peer-deps
+
+          # Build bản web tĩnh của gpx.studio
+          npm run build
+
+          # Kiểm tra thư mục xuất file tĩnh (build hoặc dist)
+          WEB_DIR="build"
+          if [ ! -d "build" ] && [ -d ".svelte-kit/output/client" ]; then
+            mkdir -p build
+            cp -r .svelte-kit/output/client/* build/
+          fi
+          if [ ! -f "$WEB_DIR/index.html" ] && [ -f "$WEB_DIR/200.html" ]; then
+            cp "$WEB_DIR/200.html" "$WEB_DIR/index.html"
+          fi
+
+          # Tự động khởi tạo cấu hình Capacitor nếu chưa có
+          if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ]; then
+            npx cap init "RideWithGPX" "vn.linhtranngoc.gpxstudio" --web-dir "$WEB_DIR"
+          fi
+
+          # Tạo thư mục Android và đồng bộ dữ liệu web vào App
+          if [ ! -d "android" ]; then
+            npx cap add android
+          else
+            npx cap sync android
+          fi
+
+      - name: 6. Tự động cấp quyền GPS (Location) vào AndroidManifest.xml
+        working-directory: ./website/android/app/src/main
+        run: |
+          if ! grep -q "ACCESS_FINE_LOCATION" AndroidManifest.xml; then
+            sed -i '/<application/i \    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-feature android:name="android.hardware.location.gps" />' AndroidManifest.xml
+          fi
+
+      - name: 7. Biên dịch file APK bằng Gradle
+        working-directory: ./website/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: 8. Tải file APK lên mục Artifacts để tải về máy
+        uses: actions/upload-artifact@v4
+        with:
+          name: RideWithGPX-Android-APK
+          path: website/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
