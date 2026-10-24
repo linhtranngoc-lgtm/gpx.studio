@@ -1,0 +1,53 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Cho phép bấm nút chạy thủ công trong tab Actions
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout mã nguồn
+        uses: actions/checkout@v4
+
+      - name: 2. Cài đặt Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 3. Cài đặt Java JDK 17 (Bắt buộc cho Gradle/Android)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 4. Cài đặt dependencies và Build Web
+        env:
+          # Thêm các biến môi trường/API key của bạn ở đây nếu có (ví dụ Mapbox token)
+          PUBLIC_MAPBOX_TOKEN: ${{ secrets.PUBLIC_MAPBOX_TOKEN }}
+        run: |
+          npm install
+          npm run build
+
+      - name: 5. Tích hợp Capacitor và khởi tạo Android
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "GPX Studio" "com.linhtran.gpxstudio" --web-dir build
+          npx cap add android
+          npx cap sync android
+
+      - name: 6. Biên dịch file APK bằng Gradle
+        working-directory: ./android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: 7. Tải file APK lên Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPX-Studio-Debug-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
